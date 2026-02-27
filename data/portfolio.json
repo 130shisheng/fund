@@ -1,0 +1,41 @@
+{
+  "base_currency": "CNY",
+  "refresh_seconds": 15,
+  "positions": [
+    {
+      "asset_type": "fund",
+      "code": "161725",
+      "name": "招商中证白酒指数A",
+      "units": 1200.0,
+      "cost_price": 1.05
+    },
+    {
+      "asset_type": "stock",
+      "code": "sh600519",
+      "name": "贵州茅台",
+      "units": 2.0,
+      "cost_price": 1680.0
+    },
+    {
+      "asset_type": "stock",
+      "code": "sz300750",
+      "name": "宁德时代",
+      "units": 10.0,
+      "cost_price": 210.0
+    },
+    {
+      "asset_type": "fund",
+      "code": "510300",
+      "name": "华泰柏瑞沪深300ETF",
+      "units": 2118.2402,
+      "cost_price": 4.7209
+    },
+    {
+      "asset_type": "fund",
+      "code": "016858",
+      "name": "国金量化多因子股票C",
+      "units": 2989.8942,
+      "cost_price": 3.3446
+    }
+  ]
+}
