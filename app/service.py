@@ -8,12 +8,16 @@ from app.schemas import (
     FundImportItem,
     FundImportResponse,
     FundImportResult,
+    PositionConfig,
+    PositionDeleteResponse,
+    PositionMutationResponse,
+    PositionQuote,
+    PositionUpdateRequest,
+    PositionUpsertRequest,
     PortfolioConfig,
     PortfolioMeta,
     PortfolioSnapshot,
     PortfolioTotals,
-    PositionConfig,
-    PositionQuote,
 )
 
 
@@ -43,6 +47,167 @@ class PortfolioService:
             updated_at=datetime.now().isoformat(timespec="seconds"),
         )
         return PortfolioSnapshot(meta=meta, totals=totals, positions=positions)
+
+    async def import_fund_items(self, items: list[FundImportItem]) -> FundImportResponse:
+        async with self._config_lock:
+            config = self.load_config()
+            results: list[FundImportResult] = []
+            has_changes = False
+            added = 0
+            updated = 0
+            failed = 0
+
+            for item in items:
+                code = item.code.strip()
+                normalized_code = self._normalize_code("fund", code)
+
+                try:
+                    quote = await self._provider.get_quote("fund", normalized_code)
+                    if quote.price <= 0:
+                        raise ValueError("基金净值无效")
+
+                    import_amount = round(item.amount, 2)
+                    imported_units = round(import_amount / quote.price, 4)
+                    if imported_units <= 0:
+                        raise ValueError("持仓金额过小，无法换算为有效份额")
+
+                    existing_position = self._find_position(config, "fund", normalized_code)
+                    display_name = item.name or quote.name or normalized_code
+
+                    if existing_position:
+                        previous_cost = existing_position.units * existing_position.cost_price
+                        total_cost = previous_cost + import_amount
+                        total_units = round(existing_position.units + imported_units, 4)
+                        existing_position.units = total_units
+                        existing_position.cost_price = round(total_cost / total_units, 6)
+                        if item.name:
+                            existing_position.name = item.name
+                        results.append(
+                            FundImportResult(
+                                code=normalized_code,
+                                name=display_name,
+                                amount=import_amount,
+                                units=imported_units,
+                                cost_price=round(quote.price, 6),
+                                status="updated",
+                            )
+                        )
+                        updated += 1
+                    else:
+                        config.positions.append(
+                            PositionConfig(
+                                asset_type="fund",
+                                code=normalized_code,
+                                name=display_name,
+                                units=imported_units,
+                                cost_price=round(quote.price, 6),
+                            )
+                        )
+                        results.append(
+                            FundImportResult(
+                                code=normalized_code,
+                                name=display_name,
+                                amount=import_amount,
+                                units=imported_units,
+                                cost_price=round(quote.price, 6),
+                                status="added",
+                            )
+                        )
+                        added += 1
+
+                    has_changes = True
+                except Exception as error:
+                    failed += 1
+                    results.append(
+                        FundImportResult(
+                            code=normalized_code,
+                            amount=round(item.amount, 2),
+                            status="failed",
+                            error=str(error),
+                        )
+                    )
+
+            if has_changes:
+                self.save_config(config)
+
+            return FundImportResponse(
+                added=added,
+                updated=updated,
+                failed=failed,
+                items=results,
+            )
+
+    async def add_position(self, payload: PositionUpsertRequest) -> PositionMutationResponse:
+        async with self._config_lock:
+            config = self.load_config()
+            normalized_code = self._normalize_code(payload.asset_type, payload.code)
+
+            if self._find_position(config, payload.asset_type, normalized_code):
+                raise ValueError(f"{payload.asset_type}:{normalized_code} 已存在")
+
+            display_name = payload.name
+            if not display_name:
+                try:
+                    quote = await self._provider.get_quote(payload.asset_type, normalized_code)
+                    display_name = quote.name
+                except Exception:
+                    display_name = normalized_code
+
+            position = PositionConfig(
+                asset_type=payload.asset_type,
+                code=normalized_code,
+                name=display_name,
+                units=round(payload.units, 4),
+                cost_price=round(payload.cost_price, 6),
+            )
+            config.positions.append(position)
+            self.save_config(config)
+            return PositionMutationResponse(message="新增持仓成功", position=position)
+
+    async def update_position(
+        self, asset_type: str, code: str, payload: PositionUpdateRequest
+    ) -> PositionMutationResponse:
+        async with self._config_lock:
+            config = self.load_config()
+            normalized_code = self._normalize_code(asset_type, code)
+            position = self._find_position(config, asset_type, normalized_code)
+            if not position:
+                raise LookupError(f"{asset_type}:{normalized_code} 不存在")
+
+            if payload.name is not None:
+                cleaned_name = payload.name.strip()
+                position.name = cleaned_name or None
+            if payload.units is not None:
+                position.units = round(payload.units, 4)
+            if payload.cost_price is not None:
+                position.cost_price = round(payload.cost_price, 6)
+
+            self.save_config(config)
+            return PositionMutationResponse(message="修改持仓成功", position=position)
+
+    async def delete_position(self, asset_type: str, code: str) -> PositionDeleteResponse:
+        async with self._config_lock:
+            config = self.load_config()
+            normalized_code = self._normalize_code(asset_type, code)
+            target_index = next(
+                (
+                    index
+                    for index, position in enumerate(config.positions)
+                    if position.asset_type == asset_type
+                    and self._normalize_code(position.asset_type, position.code) == normalized_code
+                ),
+                None,
+            )
+            if target_index is None:
+                raise LookupError(f"{asset_type}:{normalized_code} 不存在")
+
+            config.positions.pop(target_index)
+            self.save_config(config)
+            return PositionDeleteResponse(
+                message="删除持仓成功",
+                asset_type=asset_type,
+                code=normalized_code,
+            )
 
     async def _evaluate_position(self, position: PositionConfig) -> PositionQuote:
         display_name = position.name or position.code
@@ -101,96 +266,21 @@ class PortfolioService:
             failed_positions=failed_positions,
         )
 
-    async def import_fund_items(self, items: list[FundImportItem]) -> FundImportResponse:
-        async with self._config_lock:
-            config = self.load_config()
-            results: list[FundImportResult] = []
-            has_changes = False
-            added = 0
-            updated = 0
-            failed = 0
+    def _normalize_code(self, asset_type: str, code: str) -> str:
+        value = code.strip()
+        if asset_type == "stock":
+            return self._provider.normalize_stock_code(value)
+        return value
 
-            for item in items:
-                code = item.code.strip()
-                try:
-                    quote = await self._provider.get_quote("fund", code)
-                    if quote.price <= 0:
-                        raise ValueError("基金净值无效")
-
-                    import_amount = round(item.amount, 2)
-                    imported_units = round(import_amount / quote.price, 4)
-                    if imported_units <= 0:
-                        raise ValueError("持仓金额过小，无法转换为有效份额")
-
-                    existing_position = next(
-                        (
-                            position
-                            for position in config.positions
-                            if position.asset_type == "fund" and position.code.strip() == code
-                        ),
-                        None,
-                    )
-                    display_name = item.name or quote.name or code
-
-                    if existing_position:
-                        previous_cost = existing_position.units * existing_position.cost_price
-                        total_cost = previous_cost + import_amount
-                        total_units = round(existing_position.units + imported_units, 4)
-                        existing_position.units = total_units
-                        existing_position.cost_price = round(total_cost / total_units, 6)
-                        if item.name:
-                            existing_position.name = item.name
-                        results.append(
-                            FundImportResult(
-                                code=code,
-                                name=display_name,
-                                amount=import_amount,
-                                units=imported_units,
-                                cost_price=round(quote.price, 6),
-                                status="updated",
-                            )
-                        )
-                        updated += 1
-                    else:
-                        config.positions.append(
-                            PositionConfig(
-                                asset_type="fund",
-                                code=code,
-                                name=display_name,
-                                units=imported_units,
-                                cost_price=round(quote.price, 6),
-                            )
-                        )
-                        results.append(
-                            FundImportResult(
-                                code=code,
-                                name=display_name,
-                                amount=import_amount,
-                                units=imported_units,
-                                cost_price=round(quote.price, 6),
-                                status="added",
-                            )
-                        )
-                        added += 1
-
-                    has_changes = True
-                except Exception as error:
-                    failed += 1
-                    results.append(
-                        FundImportResult(
-                            code=code,
-                            amount=round(item.amount, 2),
-                            status="failed",
-                            error=str(error),
-                        )
-                    )
-
-            if has_changes:
-                self.save_config(config)
-
-            return FundImportResponse(
-                added=added,
-                updated=updated,
-                failed=failed,
-                items=results,
-            )
+    def _find_position(
+        self, config: PortfolioConfig, asset_type: str, code: str
+    ) -> PositionConfig | None:
+        return next(
+            (
+                position
+                for position in config.positions
+                if position.asset_type == asset_type
+                and self._normalize_code(position.asset_type, position.code) == code
+            ),
+            None,
+        )

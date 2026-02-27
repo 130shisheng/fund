@@ -79,7 +79,7 @@ class QuoteProvider:
         )
 
     async def _fetch_stock_quote(self, code: str) -> RawQuote:
-        normalized_code = self._normalize_stock_code(code)
+        normalized_code = self.normalize_stock_code(code)
         url = f"https://qt.gtimg.cn/q={normalized_code}"
         response = await self._client.get(url)
         if response.status_code != 200:
@@ -114,7 +114,7 @@ class QuoteProvider:
             source="tencent",
         )
 
-    def _normalize_stock_code(self, code: str) -> str:
+    def normalize_stock_code(self, code: str) -> str:
         candidate = code.lower().strip()
         if candidate.startswith(("sh", "sz", "hk", "us")):
             return candidate

@@ -11,7 +11,7 @@
       <header class="header">
         <div>
           <h1>基金/股票实时估值</h1>
-          <p>实时展示组合市值与盈亏</p>
+          <p>实时展示组合市值与盈亏，并支持持仓增删改</p>
         </div>
         <div class="header-meta">
           <div>刷新间隔：<span id="refresh-seconds">{{ refresh_seconds }}</span>s</div>
@@ -20,9 +20,43 @@
         </div>
       </header>
 
-      <section class="import-card">
-        <h2>导入基金持仓</h2>
-        <form id="fund-import-form" class="import-form">
+      <section class="action-card">
+        <h2>新增 / 修改持仓</h2>
+        <form id="position-form" class="action-form">
+          <label>
+            资产类型
+            <select id="position-asset-type" required>
+              <option value="fund">基金</option>
+              <option value="stock">股票</option>
+            </select>
+          </label>
+          <label>
+            代码
+            <input id="position-code" type="text" placeholder="基金示例 161725 / 股票示例 sh600519" required />
+          </label>
+          <label>
+            名称（可选）
+            <input id="position-name" type="text" placeholder="可留空，自动显示代码或行情名称" />
+          </label>
+          <label>
+            持仓份额/股数
+            <input id="position-units" type="number" min="0.0001" step="0.0001" required />
+          </label>
+          <label>
+            成本价
+            <input id="position-cost-price" type="number" min="0.0001" step="0.0001" required />
+          </label>
+          <div class="form-actions">
+            <button id="position-submit" type="submit">新增持仓</button>
+            <button id="position-cancel" type="button" class="secondary hidden">取消编辑</button>
+          </div>
+        </form>
+        <p id="position-message" class="hint"></p>
+      </section>
+
+      <section class="action-card">
+        <h2>按基金金额导入</h2>
+        <form id="fund-import-form" class="action-form compact">
           <label>
             基金代码
             <input id="fund-code" type="text" placeholder="例如 161725" required />
@@ -73,6 +107,7 @@
               <th>市值</th>
               <th>盈亏</th>
               <th>状态</th>
+              <th>操作</th>
             </tr>
           </thead>
           <tbody id="positions-body"></tbody>

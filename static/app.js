@@ -16,6 +16,15 @@ const elements = {
   fundName: document.getElementById("fund-name"),
   importButton: document.getElementById("import-button"),
   importMessage: document.getElementById("import-message"),
+  positionForm: document.getElementById("position-form"),
+  positionAssetType: document.getElementById("position-asset-type"),
+  positionCode: document.getElementById("position-code"),
+  positionName: document.getElementById("position-name"),
+  positionUnits: document.getElementById("position-units"),
+  positionCostPrice: document.getElementById("position-cost-price"),
+  positionSubmit: document.getElementById("position-submit"),
+  positionCancel: document.getElementById("position-cancel"),
+  positionMessage: document.getElementById("position-message"),
 };
 
 const numberFormatter = new Intl.NumberFormat("zh-CN", {
@@ -27,6 +36,20 @@ const priceFormatter = new Intl.NumberFormat("zh-CN", {
   minimumFractionDigits: 4,
   maximumFractionDigits: 4,
 });
+
+const editState = {
+  isEditing: false,
+  assetType: "",
+  code: "",
+};
+
+const escapeHtml = (value) =>
+  String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 
 const formatMoney = (value, currency = "CNY") => {
   const sign = value < 0 ? "-" : "";
@@ -54,6 +77,53 @@ const trendClass = (value) => {
   return "";
 };
 
+const setError = (message) => {
+  if (!message) {
+    elements.errorMessage.textContent = "";
+    elements.errorMessage.classList.add("hidden");
+    return;
+  }
+  elements.errorMessage.textContent = message;
+  elements.errorMessage.classList.remove("hidden");
+};
+
+const setImportMessage = (message, isError = false) => {
+  elements.importMessage.textContent = message || "";
+  elements.importMessage.classList.toggle("error-text", isError);
+};
+
+const setPositionMessage = (message, isError = false) => {
+  elements.positionMessage.textContent = message || "";
+  elements.positionMessage.classList.toggle("error-text", isError);
+};
+
+const resetPositionForm = () => {
+  editState.isEditing = false;
+  editState.assetType = "";
+  editState.code = "";
+  elements.positionForm.reset();
+  elements.positionAssetType.disabled = false;
+  elements.positionCode.disabled = false;
+  elements.positionSubmit.textContent = "新增持仓";
+  elements.positionCancel.classList.add("hidden");
+};
+
+const enterEditMode = (position) => {
+  editState.isEditing = true;
+  editState.assetType = position.asset_type;
+  editState.code = position.code;
+  elements.positionAssetType.value = position.asset_type;
+  elements.positionCode.value = position.code;
+  elements.positionName.value = position.name || "";
+  elements.positionUnits.value = position.units;
+  elements.positionCostPrice.value = position.cost_price;
+  elements.positionAssetType.disabled = true;
+  elements.positionCode.disabled = true;
+  elements.positionSubmit.textContent = "保存修改";
+  elements.positionCancel.classList.remove("hidden");
+  setPositionMessage(`正在编辑 ${position.asset_type}:${position.code}`);
+};
+
 const renderTotals = (totals, currency) => {
   elements.totalCost.textContent = formatMoney(totals.total_cost, currency);
   elements.totalMarket.textContent = formatMoney(totals.total_market_value, currency);
@@ -70,10 +140,12 @@ const renderRow = (position, currency) => {
   const changeClass = trendClass(position.change_percent);
   const statusText = position.status === "ok" ? "正常" : "异常";
   const statusClass = position.status === "ok" ? "" : "error-tag";
+  const quotedName = escapeHtml(position.name);
+  const quotedCode = escapeHtml(position.code);
 
   row.innerHTML = `
-    <td>${position.name}</td>
-    <td>${position.code}</td>
+    <td>${quotedName}</td>
+    <td>${quotedCode}</td>
     <td>${numberFormatter.format(position.units)}</td>
     <td>${priceFormatter.format(position.cost_price)}</td>
     <td>${position.current_price !== null ? priceFormatter.format(position.current_price) : "--"}</td>
@@ -86,7 +158,12 @@ const renderRow = (position, currency) => {
         : "--"
     }</td>
     <td class="${statusClass}">${statusText}</td>
+    <td>
+      <button class="table-btn" data-action="edit" data-asset-type="${position.asset_type}" data-code="${quotedCode}">修改</button>
+      <button class="table-btn danger" data-action="delete" data-asset-type="${position.asset_type}" data-code="${quotedCode}">删除</button>
+    </td>
   `;
+
   return row;
 };
 
@@ -95,25 +172,6 @@ const renderPositions = (positions, currency) => {
   positions.forEach((position) => {
     elements.positionsBody.appendChild(renderRow(position, currency));
   });
-};
-
-const setError = (message) => {
-  if (!message) {
-    elements.errorMessage.textContent = "";
-    elements.errorMessage.classList.add("hidden");
-    return;
-  }
-  elements.errorMessage.textContent = message;
-  elements.errorMessage.classList.remove("hidden");
-};
-
-const setImportMessage = (message, isError = false) => {
-  elements.importMessage.textContent = message || "";
-  if (!message) {
-    elements.importMessage.classList.remove("error-text");
-    return;
-  }
-  elements.importMessage.classList.toggle("error-text", isError);
 };
 
 const fetchSnapshot = async () => {
@@ -134,8 +192,10 @@ const refresh = async () => {
     renderTotals(snapshot.totals, currency);
     renderPositions(snapshot.positions, currency);
     setError("");
+    return snapshot;
   } catch (error) {
     setError(`拉取数据失败：${error.message}`);
+    return null;
   }
 };
 
@@ -159,20 +219,20 @@ const importFund = async (event) => {
   elements.importButton.textContent = "导入中...";
 
   try {
-    const payload = {
-      items: [
-        {
-          code,
-          amount,
-          ...(name ? { name } : {}),
-        },
-      ],
-    };
     const response = await fetch("/api/portfolio/import-funds", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        items: [
+          {
+            code,
+            amount,
+            ...(name ? { name } : {}),
+          },
+        ],
+      }),
     });
+
     if (!response.ok) {
       throw new Error(`导入失败: ${response.status}`);
     }
@@ -180,7 +240,7 @@ const importFund = async (event) => {
     const result = await response.json();
     const item = result.items?.[0];
     if (!item || item.status === "failed") {
-      throw new Error(item?.error || "数据源返回异常");
+      throw new Error(item?.error || "基金数据不可用");
     }
 
     const actionText = item.status === "added" ? "新增" : "合并";
@@ -189,7 +249,6 @@ const importFund = async (event) => {
         item.units
       )}`
     );
-
     elements.importForm.reset();
     await refresh();
   } catch (error) {
@@ -200,6 +259,133 @@ const importFund = async (event) => {
   }
 };
 
+const submitPosition = async (event) => {
+  event.preventDefault();
+  setPositionMessage("");
+
+  const assetType = elements.positionAssetType.value;
+  const code = elements.positionCode.value.trim();
+  const name = elements.positionName.value.trim();
+  const units = Number(elements.positionUnits.value);
+  const costPrice = Number(elements.positionCostPrice.value);
+
+  if (!code) {
+    setPositionMessage("请输入资产代码。", true);
+    return;
+  }
+  if (!Number.isFinite(units) || units <= 0) {
+    setPositionMessage("请输入有效的持仓份额/股数。", true);
+    return;
+  }
+  if (!Number.isFinite(costPrice) || costPrice <= 0) {
+    setPositionMessage("请输入有效的成本价。", true);
+    return;
+  }
+
+  elements.positionSubmit.disabled = true;
+
+  try {
+    let response;
+    if (editState.isEditing) {
+      response = await fetch(
+        `/api/positions/${encodeURIComponent(editState.assetType)}/${encodeURIComponent(editState.code)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: name || null,
+            units,
+            cost_price: costPrice,
+          }),
+        }
+      );
+    } else {
+      response = await fetch("/api/positions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          asset_type: assetType,
+          code,
+          name: name || null,
+          units,
+          cost_price: costPrice,
+        }),
+      });
+    }
+
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.detail || `请求失败: ${response.status}`);
+    }
+
+    const result = await response.json();
+    setPositionMessage(result.message || "操作成功");
+    resetPositionForm();
+    await refresh();
+  } catch (error) {
+    setPositionMessage(`操作失败：${error.message}`, true);
+  } finally {
+    elements.positionSubmit.disabled = false;
+  }
+};
+
+const handleTableAction = async (event) => {
+  const button = event.target.closest("button[data-action]");
+  if (!button) {
+    return;
+  }
+
+  const action = button.dataset.action;
+  const assetType = button.dataset.assetType;
+  const code = button.dataset.code;
+  if (!assetType || !code) {
+    return;
+  }
+
+  if (action === "edit") {
+    const snapshot = await fetchSnapshot();
+    const target = snapshot?.positions?.find(
+      (item) => item.asset_type === assetType && item.code === code
+    );
+    if (!target) {
+      setPositionMessage("未找到可编辑的持仓记录。", true);
+      return;
+    }
+    enterEditMode(target);
+    return;
+  }
+
+  if (action === "delete") {
+    if (!window.confirm(`确认删除 ${assetType}:${code} 吗？`)) {
+      return;
+    }
+    try {
+      const response = await fetch(
+        `/api/positions/${encodeURIComponent(assetType)}/${encodeURIComponent(code)}`,
+        { method: "DELETE" }
+      );
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || `删除失败: ${response.status}`);
+      }
+      setPositionMessage(`删除成功：${assetType}:${code}`);
+      if (editState.isEditing && editState.assetType === assetType && editState.code === code) {
+        resetPositionForm();
+      }
+      await refresh();
+    } catch (error) {
+      setPositionMessage(`删除失败：${error.message}`, true);
+    }
+  }
+};
+
 elements.importForm.addEventListener("submit", importFund);
+elements.positionForm.addEventListener("submit", submitPosition);
+elements.positionCancel.addEventListener("click", () => {
+  resetPositionForm();
+  setPositionMessage("");
+});
+elements.positionsBody.addEventListener("click", handleTableAction);
+
 refresh();
 setInterval(refresh, Math.max(Number(config.refreshSeconds) || 15, 5) * 1000);
